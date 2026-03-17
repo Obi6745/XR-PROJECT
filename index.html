@@ -93,3 +93,38 @@
     </style>
   </head>
   <body>
+    <div id="overlay-ui">
+      <div id="status">SafeRoute XR · Ready</div>
+      <div>
+        <button id="nav-mode-btn" class="active">Navigation Mode</button>
+        <button id="safety-mode-btn">Safety Mode</button>
+        <button id="audio-btn">Audio: Off</button>
+      </div>
+    </div>
+
+    <div id="enter-ar-container">
+      <button id="enter-ar">Start SafeRoute XR</button>
+    </div>
+
+    <div id="info">
+      Stand at a 4-way intersection and move your phone slowly to scan the
+      ground. When anchors appear, you will see:
+      <br />
+      - Green: suggested safe crosswalk path
+      <br />
+      - Red: high-risk intersection zone
+      <br />
+      - Floating prompts: "WAIT", "CROSS", "LOOK LEFT / RIGHT"
+    </div>
+
+    <!-- Three.js and WebXR helpers-->
+    <script src="https://unpkg.com/three@0.165.0/build/three.min.js"></script>
+    <script src="https://unpkg.com/three@0.165.0/examples/jsm/controls/OrbitControls.js" type="module"></script>
+    <script
+      src="https://unpkg.com/three@0.165.0/examples/jsm/webxr/ARButton.js"
+      type="module"
+    ></script>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
