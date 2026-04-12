@@ -1,8 +1,10 @@
-// SafeRoute XR — Babylon.js WebXR final prototype (scene, lights, materials, WebXR hit-test)
+// SafeRoute XR — 4-way intersection in the browser (Babylon.js + WebXR AR).
 
+// --- Canvas and engine ---
 const canvas = document.getElementById("renderCanvas");
 const engine = new BABYLON.Engine(canvas, true);
 
+// --- HTML buttons and text ---
 const statusElement = document.getElementById("status");
 const navModeBtn = document.getElementById("nav-mode-btn");
 const safetyModeBtn = document.getElementById("safety-mode-btn");
@@ -14,12 +16,13 @@ const previewOnlyButton = document.getElementById("preview-only-btn");
 const lockPlacementBtn = document.getElementById("lock-placement-btn");
 const resetPlacementBtn = document.getElementById("reset-placement-btn");
 
+// --- App state ---
 let mode = "navigation";
 let audioEnabled = false;
 let audioContext;
 let simpleBeepOscillator = null;
 
-// Filled after the scene builds (for AR enter / exit)
+// --- 3D nodes (set when the scene is created) ---
 let xrHelper = null;
 let intersectionRoot = null;
 let riskZoneMat = null;
@@ -29,7 +32,7 @@ let labelWaitMesh = null;
 let labelCrossMesh = null;
 let labelLookMesh = null;
 
-// AR placement: smooth hit-test, then lock with anchor (or freeze) so content does not jitter
+// --- AR placement (smooth tracking, then lock so nothing jitters) ---
 let placementLocked = false;
 let lastHitTestRaw = null;
 let currentAnchorPoint = null;
@@ -40,12 +43,14 @@ const hitTargetPos = new BABYLON.Vector3();
 const hitTargetQuat = new BABYLON.Quaternion();
 const HIT_SMOOTH = 0.1;
 
+// Update the line of text at the top of the page.
 function setStatus(text) {
   if (statusElement) {
     statusElement.textContent = text;
   }
 }
 
+// Navigation = green path + arrow. Safety = warnings + stronger risk color.
 function setMode(newMode) {
   mode = newMode;
   if (mode === "navigation") {
@@ -61,6 +66,7 @@ function setMode(newMode) {
   updateLabelsText();
 }
 
+// Turn the simple beep on or off (needs a user click first on many browsers).
 function toggleAudio() {
   audioEnabled = !audioEnabled;
   if (audioBtn) {
@@ -79,6 +85,7 @@ function toggleAudio() {
   }
 }
 
+// Start a quiet steady tone.
 function playWaitBeep() {
   if (!audioEnabled || !audioContext) return;
   stopBeep();
@@ -91,6 +98,7 @@ function playWaitBeep() {
   simpleBeepOscillator.start();
 }
 
+// Stop the tone if it is playing.
 function stopBeep() {
   if (simpleBeepOscillator) {
     try {
@@ -103,31 +111,47 @@ function stopBeep() {
   }
 }
 
-// Text on a plane using a dynamic texture
-function createFloatingLabel(scene, parent, text, cssColor, y, z) {
+// Draw text to a canvas texture and put it on a plane (always faces the camera).
+function createFloatingLabel(scene, parent, text, cssColor, y, z, opts) {
+  opts = opts || {};
+  const planeW = opts.width != null ? opts.width : 1.4;
+  const planeH = opts.height != null ? opts.height : 0.7;
+  const texW = 512;
+  const texH = opts.secondLine ? 320 : 256;
+
   const plane = BABYLON.MeshBuilder.CreatePlane(
     "label_" + text.replace(/\s/g, "_"),
-    { width: 1.4, height: 0.7 },
+    { width: planeW, height: planeH },
     scene
   );
   plane.parent = parent;
   plane.position.set(0, y, z);
   plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+  // Higher group draws later so this sign can sit on top of others.
+  if (typeof opts.renderGroupId === "number") {
+    plane.renderingGroupId = opts.renderGroupId;
+  }
 
   const tex = new BABYLON.DynamicTexture(
-    "dyn_" + text,
-    { width: 512, height: 256 },
+    "dyn_" + text.replace(/\s/g, "_"),
+    { width: texW, height: texH },
     scene,
     false
   );
   const ctx = tex.getContext();
   ctx.fillStyle = "rgba(15,23,42,0.88)";
-  ctx.fillRect(0, 0, 512, 256);
+  ctx.fillRect(0, 0, texW, texH);
   ctx.fillStyle = cssColor;
-  ctx.font = "bold 64px Arial";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText(text, 256, 128);
+  if (opts.secondLine) {
+    ctx.font = "bold 56px Arial";
+    ctx.fillText(text, texW / 2, texH * 0.35);
+    ctx.fillText(opts.secondLine, texW / 2, texH * 0.68);
+  } else {
+    ctx.font = "bold 64px Arial";
+    ctx.fillText(text, texW / 2, texH / 2);
+  }
   tex.update();
 
   const mat = new BABYLON.StandardMaterial("mat_" + text, scene);
@@ -136,11 +160,12 @@ function createFloatingLabel(scene, parent, text, cssColor, y, z) {
   mat.emissiveColor = BABYLON.Color3.White();
   mat.backFaceCulling = false;
   mat.disableLighting = true;
+  mat.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
   plane.material = mat;
   return plane;
 }
 
-// Four crosswalk strips, center risk area, arrow (cone), and labels under one parent node
+// Build the whole intersection as children of one node (easier to move in AR).
 function buildFourWayIntersection(scene) {
   const root = new BABYLON.TransformNode("intersectionRoot", scene);
   const crosswalkLength = 3;
@@ -162,6 +187,7 @@ function buildFourWayIntersection(scene) {
 
   const cwList = [];
 
+  // One strip of crosswalk; rotY turns it for east-west vs north-south.
   function addCrosswalk(name, x, z, rotY) {
     const cw = BABYLON.MeshBuilder.CreateGround(
       name,
@@ -185,6 +211,7 @@ function buildFourWayIntersection(scene) {
   addCrosswalk("crosswalkWest", -streetWidth, 0, Math.PI / 2);
   addCrosswalk("crosswalkEast", streetWidth, 0, Math.PI / 2);
 
+  // Cone on its side reads as a forward arrow in navigation mode.
   const arrow = BABYLON.MeshBuilder.CreateCylinder(
     "directionArrow",
     {
@@ -202,10 +229,20 @@ function buildFourWayIntersection(scene) {
   arrowMat.diffuseColor = new BABYLON.Color3(0.1, 0.8, 0.25);
   arrow.material = arrowMat;
 
-  const lw = createFloatingLabel(scene, root, "WAIT - TRAFFIC", "#f97316", 1.3, -0.2);
-  const lc = createFloatingLabel(scene, root, "CROSS NOW", "#22c55e", 1.3, -0.2);
+  // WAIT/CROSS lower; LOOK stacked above so billboards do not hide each other
+  const lw = createFloatingLabel(scene, root, "WAIT - TRAFFIC", "#f97316", 1.05, -0.22, {
+    renderGroupId: 1,
+  });
+  const lc = createFloatingLabel(scene, root, "CROSS NOW", "#22c55e", 1.05, -0.22, {
+    renderGroupId: 1,
+  });
   lc.isVisible = false;
-  const ll = createFloatingLabel(scene, root, "LOOK LEFT / RIGHT", "#e5e7eb", 1, 0.9);
+  const ll = createFloatingLabel(scene, root, "LOOK LEFT", "#f5f5f5", 1.95, -0.22, {
+    renderGroupId: 2,
+    width: 1.55,
+    height: 0.72,
+    secondLine: "LOOK RIGHT",
+  });
 
   return {
     root,
@@ -218,6 +255,7 @@ function buildFourWayIntersection(scene) {
   };
 }
 
+// Show WAIT or CROSS depending on mode; LOOK stays visible.
 function updateLabelsText() {
   if (!labelWaitMesh || !labelCrossMesh || !labelLookMesh) return;
   if (mode === "navigation") {
@@ -231,6 +269,7 @@ function updateLabelsText() {
   }
 }
 
+// Crosswalk colors, risk opacity, and arrow on/off from current mode.
 function updateIntersectionColors() {
   if (!crosswalkMeshes.length || !riskZoneMat || !directionArrow) return;
 
@@ -258,10 +297,12 @@ function updateIntersectionColors() {
   }
 }
 
+// Main setup: preview scene on desktop, same content in AR on a headset or phone.
 const createScene = async function () {
   const scene = new BABYLON.Scene(engine);
   scene.clearColor = new BABYLON.Color4(0.02, 0.04, 0.08, 1);
 
+  // Orbit camera for preview only; WebXR uses its own camera in AR.
   const camera = new BABYLON.ArcRotateCamera(
     "camera",
     -Math.PI / 2,
@@ -281,7 +322,7 @@ const createScene = async function () {
   );
   light.intensity = 0.75;
 
-  // Desktop preview: ground mesh with a tiled diffuse texture
+  // Big floor so you can spin the scene on a laptop (hidden during AR).
   const ground = BABYLON.MeshBuilder.CreateGround(
     "previewGround",
     { width: 24, height: 24 },
@@ -311,7 +352,7 @@ const createScene = async function () {
   updateIntersectionColors();
   updateLabelsText();
 
-  // WebXR immersive AR with hit-test; anchors optional for stable placement
+  // AR session: find the real floor with hit-test; anchors help lock position.
   const xr = await scene.createDefaultXRExperienceAsync({
     uiOptions: {
       sessionMode: "immersive-ar",
@@ -329,6 +370,7 @@ const createScene = async function () {
     anchorSystem = null;
   }
 
+  // Small disk on the floor while tracking; intersection is parented to it until you lock.
   const marker = BABYLON.MeshBuilder.CreateCylinder(
     "hitMarker",
     { diameter: 0.15, height: 0.01 },
@@ -342,6 +384,7 @@ const createScene = async function () {
   markerMat.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
   marker.material = markerMat;
 
+  // Lock only makes sense in AR; Unlock only after something is locked.
   function updatePlacementButtons() {
     const inXR = xrHelper && xrHelper.state === BABYLON.WebXRState.IN_XR;
     if (lockPlacementBtn) {
@@ -352,6 +395,7 @@ const createScene = async function () {
     }
   }
 
+  // Go back to following the hit-test (destroys the anchor if there was one).
   function unlockPlacement() {
     placementLocked = false;
     hitSmoothingStarted = false;
@@ -373,6 +417,7 @@ const createScene = async function () {
     }
   }
 
+  // Pin the intersection to the world using an anchor, or just stop moving if no anchors.
   async function lockPlacement() {
     if (placementLocked || xrHelper.state !== BABYLON.WebXRState.IN_XR) {
       return;
@@ -406,6 +451,7 @@ const createScene = async function () {
     updatePlacementButtons();
   }
 
+  // Each frame: move the marker toward the hit (smooth), unless placement is locked.
   hitTest.onHitTestResultObservable.add((results) => {
     const inXR = xrHelper.state === BABYLON.WebXRState.IN_XR;
     lastHitTestRaw = results.length ? results[0] : null;
@@ -453,6 +499,7 @@ const createScene = async function () {
     }
   });
 
+  // Entering AR hides the fake ground; leaving AR puts the preview back.
   xrHelper.onStateChangedObservable.add((state) => {
     if (state === BABYLON.WebXRState.IN_XR) {
       ground.setEnabled(false);
@@ -488,7 +535,7 @@ const createScene = async function () {
     }
   });
 
-  // Pulse red risk zone in safety mode
+  // Animate risk zone opacity in safety mode so it catches the eye.
   scene.onBeforeRenderObservable.add(() => {
     if (!riskZoneMat || !intersectionRoot || !intersectionRoot.isEnabled()) return;
     const t = performance.now();
@@ -501,6 +548,7 @@ const createScene = async function () {
     }
   });
 
+  // --- Clicks on the page ---
   if (navModeBtn) {
     navModeBtn.addEventListener("click", () => setMode("navigation"));
   }
@@ -518,6 +566,7 @@ const createScene = async function () {
     });
   }
 
+  // User gesture required to enter AR in most browsers.
   async function startAR() {
     if (!xrHelper) return;
     try {
@@ -553,12 +602,14 @@ const createScene = async function () {
   return scene;
 };
 
+// Start the render loop after the scene is ready (XR setup is async).
 createScene().then((scene) => {
   engine.runRenderLoop(function () {
     scene.render();
   });
 });
 
+// Keep the canvas full window when the browser size changes.
 window.addEventListener("resize", function () {
   engine.resize();
 });
