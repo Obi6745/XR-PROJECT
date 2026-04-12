@@ -135,6 +135,12 @@
       <div id="status">SafeRoute XR · Ready</div>
       <div>
         <button type="button" id="enter-ar-overlay">Enter AR</button>
+        <button type="button" id="lock-placement-btn" disabled>
+          Lock to floor
+        </button>
+        <button type="button" id="reset-placement-btn" disabled>
+          Unlock
+        </button>
         <button id="nav-mode-btn" class="active">Navigation Mode</button>
         <button id="safety-mode-btn">Safety Mode</button>
         <button id="audio-btn">Audio: Off</button>
@@ -161,9 +167,9 @@
     </div>
 
     <div id="info">
-      SafeRoute XR: pedestrian safety cues at a 4-way intersection — crosswalk
-      overlays, risk highlight, prompts, navigation vs safety mode, optional
-      audio. Works in browser preview or WebXR AR on a supported device.
+      In AR: aim at the floor until the layout appears, then tap Lock to floor
+      so it stays put. Unlock if you need to move it. Preview mode: drag to
+      orbit.
     </div>
   </body>
 </html>

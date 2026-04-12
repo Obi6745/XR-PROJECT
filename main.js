@@ -11,6 +11,8 @@ const enterArContainer = document.getElementById("enter-ar-container");
 const enterArButton = document.getElementById("enter-ar");
 const enterArOverlayButton = document.getElementById("enter-ar-overlay");
 const previewOnlyButton = document.getElementById("preview-only-btn");
+const lockPlacementBtn = document.getElementById("lock-placement-btn");
+const resetPlacementBtn = document.getElementById("reset-placement-btn");
 
 let mode = "navigation";
 let audioEnabled = false;
@@ -26,6 +28,17 @@ let directionArrow = null;
 let labelWaitMesh = null;
 let labelCrossMesh = null;
 let labelLookMesh = null;
+
+// AR placement: smooth hit-test, then lock with anchor (or freeze) so content does not jitter
+let placementLocked = false;
+let lastHitTestRaw = null;
+let currentAnchorPoint = null;
+let hitSmoothingStarted = false;
+let anchorSystem = null;
+const hitTmpScale = new BABYLON.Vector3();
+const hitTargetPos = new BABYLON.Vector3();
+const hitTargetQuat = new BABYLON.Quaternion();
+const HIT_SMOOTH = 0.1;
 
 function setStatus(text) {
   if (statusElement) {
@@ -298,18 +311,23 @@ const createScene = async function () {
   updateIntersectionColors();
   updateLabelsText();
 
-  // WebXR immersive AR with hit-test for floor placement
+  // WebXR immersive AR with hit-test; anchors optional for stable placement
   const xr = await scene.createDefaultXRExperienceAsync({
     uiOptions: {
       sessionMode: "immersive-ar",
       referenceSpaceType: "local-floor",
     },
-    optionalFeatures: ["hit-test"],
+    optionalFeatures: ["hit-test", "anchors"],
   });
   xrHelper = xr.baseExperience;
 
   const fm = xrHelper.featuresManager;
   const hitTest = fm.enableFeature(BABYLON.WebXRHitTest, "latest");
+  try {
+    anchorSystem = fm.enableFeature(BABYLON.WebXRAnchorSystem, "latest");
+  } catch (e) {
+    anchorSystem = null;
+  }
 
   const marker = BABYLON.MeshBuilder.CreateCylinder(
     "hitMarker",
@@ -324,16 +342,107 @@ const createScene = async function () {
   markerMat.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
   marker.material = markerMat;
 
+  function updatePlacementButtons() {
+    const inXR = xrHelper && xrHelper.state === BABYLON.WebXRState.IN_XR;
+    if (lockPlacementBtn) {
+      lockPlacementBtn.disabled = !inXR || placementLocked;
+    }
+    if (resetPlacementBtn) {
+      resetPlacementBtn.disabled = !inXR || !placementLocked;
+    }
+  }
+
+  function unlockPlacement() {
+    placementLocked = false;
+    hitSmoothingStarted = false;
+    lastHitTestRaw = null;
+    if (currentAnchorPoint) {
+      try {
+        currentAnchorPoint.dispose();
+      } catch (e) {
+        // ignore
+      }
+      currentAnchorPoint = null;
+    }
+    intersectionRoot.setParent(null);
+    intersectionRoot.setEnabled(false);
+    marker.isVisible = false;
+    updatePlacementButtons();
+    if (xrHelper && xrHelper.state === BABYLON.WebXRState.IN_XR) {
+      setStatus("Aim at the floor, then tap Lock to floor");
+    }
+  }
+
+  async function lockPlacement() {
+    if (placementLocked || xrHelper.state !== BABYLON.WebXRState.IN_XR) {
+      return;
+    }
+    if (!lastHitTestRaw) {
+      setStatus("Keep aiming at the floor until the layout appears");
+      return;
+    }
+    try {
+      if (anchorSystem) {
+        const ap =
+          await anchorSystem.addAnchorPointUsingHitTestResultAsync(
+            lastHitTestRaw
+          );
+        intersectionRoot.setParent(null);
+        ap.attachedNode = intersectionRoot;
+        intersectionRoot.position.set(0, 0, 0);
+        intersectionRoot.rotationQuaternion =
+          BABYLON.Quaternion.Identity();
+        currentAnchorPoint = ap;
+      }
+      placementLocked = true;
+      marker.isVisible = false;
+      setStatus("Locked · tap Unlock to move");
+    } catch (e) {
+      console.warn(e);
+      placementLocked = true;
+      marker.isVisible = false;
+      setStatus("Locked (no anchor) · tap Unlock to move");
+    }
+    updatePlacementButtons();
+  }
+
   hitTest.onHitTestResultObservable.add((results) => {
     const inXR = xrHelper.state === BABYLON.WebXRState.IN_XR;
+    lastHitTestRaw = results.length ? results[0] : null;
+
+    if (placementLocked) {
+      return;
+    }
+
     if (results.length && inXR) {
-      marker.isVisible = true;
       const hit = results[0];
       hit.transformationMatrix.decompose(
-        undefined,
-        marker.rotationQuaternion,
-        marker.position
+        hitTmpScale,
+        hitTargetQuat,
+        hitTargetPos
       );
+
+      if (!hitSmoothingStarted) {
+        marker.position.copyFrom(hitTargetPos);
+        marker.rotationQuaternion.copyFrom(hitTargetQuat);
+        hitSmoothingStarted = true;
+      } else {
+        BABYLON.Vector3.LerpToRef(
+          marker.position,
+          hitTargetPos,
+          HIT_SMOOTH,
+          marker.position
+        );
+        BABYLON.Quaternion.SlerpToRef(
+          marker.rotationQuaternion,
+          hitTargetQuat,
+          HIT_SMOOTH,
+          marker.rotationQuaternion
+        );
+        marker.rotationQuaternion.normalize();
+      }
+
+      marker.isVisible = true;
       intersectionRoot.setParent(marker);
       intersectionRoot.position = BABYLON.Vector3.Zero();
       intersectionRoot.rotationQuaternion = BABYLON.Quaternion.Identity();
@@ -347,10 +456,25 @@ const createScene = async function () {
   xrHelper.onStateChangedObservable.add((state) => {
     if (state === BABYLON.WebXRState.IN_XR) {
       ground.setEnabled(false);
+      placementLocked = false;
+      hitSmoothingStarted = false;
+      lastHitTestRaw = null;
       intersectionRoot.setEnabled(false);
       if (enterArContainer) enterArContainer.style.display = "none";
-      setStatus("Move phone slowly to scan the ground");
+      setStatus("Aim at the floor, then tap Lock to floor");
+      updatePlacementButtons();
     } else if (state === BABYLON.WebXRState.NOT_IN_XR) {
+      placementLocked = false;
+      hitSmoothingStarted = false;
+      lastHitTestRaw = null;
+      if (currentAnchorPoint) {
+        try {
+          currentAnchorPoint.dispose();
+        } catch (e) {
+          // ignore
+        }
+        currentAnchorPoint = null;
+      }
       ground.setEnabled(true);
       intersectionRoot.setParent(null);
       intersectionRoot.position = new BABYLON.Vector3(0, 0.01, 0);
@@ -360,6 +484,7 @@ const createScene = async function () {
       marker.isVisible = false;
       if (enterArContainer) enterArContainer.style.display = "flex";
       setStatus("SafeRoute XR · Ready");
+      updatePlacementButtons();
     }
   });
 
@@ -411,6 +536,19 @@ const createScene = async function () {
   if (enterArOverlayButton) {
     enterArOverlayButton.addEventListener("click", startAR);
   }
+
+  if (lockPlacementBtn) {
+    lockPlacementBtn.addEventListener("click", () => {
+      lockPlacement();
+    });
+  }
+  if (resetPlacementBtn) {
+    resetPlacementBtn.addEventListener("click", () => {
+      unlockPlacement();
+    });
+  }
+
+  updatePlacementButtons();
 
   return scene;
 };
