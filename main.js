@@ -75,6 +75,15 @@ const FLOATING_LABELS = {
   RENDER_GROUP_LOOK: 2,
 };
 
+// Mock traffic light: only advances while in AR (preview uses mode for labels).
+const CROSSING_PHASE = {
+  WAIT_MS: 4500,
+  CROSS_MS: 3500,
+};
+
+let crossingPhase = "wait";
+let crossingPhaseStartMs = 0;
+
 // Update the line of text at the top of the page.
 function setStatus(text) {
   if (statusElement) {
@@ -88,14 +97,40 @@ function setMode(newMode) {
   if (mode === "navigation") {
     if (navModeBtn) navModeBtn.classList.add("active");
     if (safetyModeBtn) safetyModeBtn.classList.remove("active");
-    setStatus("Navigation Mode · Follow green path");
   } else {
     if (safetyModeBtn) safetyModeBtn.classList.add("active");
     if (navModeBtn) navModeBtn.classList.remove("active");
-    setStatus("Safety Mode · Watch red warnings");
   }
   updateIntersectionColors();
   updateLabelsText();
+  refreshStatusLine();
+}
+
+// Status text: in AR include mock WAIT/CROSS; outside AR use mode-only lines.
+function refreshStatusLine() {
+  const inXR =
+    xrHelper && xrHelper.state === BABYLON.WebXRState.IN_XR;
+  if (!inXR) {
+    if (mode === "navigation") {
+      setStatus("Navigation Mode · Follow green path");
+    } else {
+      setStatus("Safety Mode · Watch red warnings");
+    }
+    return;
+  }
+  if (placementLocked) {
+    const short =
+      crossingPhase === "wait" ? "WAIT" : "CROSS";
+    setStatus(`Locked · ${short} · Unlock to move`);
+    return;
+  }
+  const signal =
+    crossingPhase === "wait" ? "Signal: WAIT" : "Signal: CROSS";
+  if (mode === "navigation") {
+    setStatus(`Navigation · ${signal}`);
+  } else {
+    setStatus(`Safety · ${signal}`);
+  }
 }
 
 // Turn the simple beep on or off (needs a user click first on many browsers).
@@ -316,17 +351,22 @@ function buildFourWayIntersection(scene) {
   };
 }
 
-// Show WAIT or CROSS depending on mode; LOOK stays visible.
+// In AR: WAIT/CROSS follow the mock phase. In preview: follow navigation vs safety.
 function updateLabelsText() {
   if (!labelWaitMesh || !labelCrossMesh || !labelLookMesh) return;
-  if (mode === "navigation") {
+  labelLookMesh.isVisible = true;
+
+  const inAr =
+    xrHelper && xrHelper.state === BABYLON.WebXRState.IN_XR;
+  if (inAr) {
+    labelWaitMesh.isVisible = crossingPhase === "wait";
+    labelCrossMesh.isVisible = crossingPhase === "cross";
+  } else if (mode === "navigation") {
     labelWaitMesh.isVisible = false;
     labelCrossMesh.isVisible = true;
-    labelLookMesh.isVisible = true;
   } else {
     labelWaitMesh.isVisible = true;
     labelCrossMesh.isVisible = false;
-    labelLookMesh.isVisible = true;
   }
 }
 
@@ -502,12 +542,12 @@ const createScene = async function () {
       }
       placementLocked = true;
       marker.isVisible = false;
-      setStatus("Locked · tap Unlock to move");
+      refreshStatusLine();
     } catch (e) {
       console.warn(e);
       placementLocked = true;
       marker.isVisible = false;
-      setStatus("Locked (no anchor) · tap Unlock to move");
+      refreshStatusLine();
     }
     updatePlacementButtons();
   }
@@ -569,9 +609,14 @@ const createScene = async function () {
       lastHitTestRaw = null;
       intersectionRoot.setEnabled(false);
       if (enterArContainer) enterArContainer.style.display = "none";
+      crossingPhase = "wait";
+      crossingPhaseStartMs = performance.now();
+      updateLabelsText();
       setStatus("Aim at the floor, then tap Lock to floor");
       updatePlacementButtons();
     } else if (state === BABYLON.WebXRState.NOT_IN_XR) {
+      crossingPhase = "wait";
+      crossingPhaseStartMs = 0;
       placementLocked = false;
       hitSmoothingStarted = false;
       lastHitTestRaw = null;
@@ -591,13 +636,28 @@ const createScene = async function () {
       intersectionRoot.setEnabled(true);
       marker.isVisible = false;
       if (enterArContainer) enterArContainer.style.display = "flex";
-      setStatus("SafeRoute XR · Ready");
+      updateLabelsText();
+      refreshStatusLine();
       updatePlacementButtons();
     }
   });
 
-  // Animate risk zone opacity in safety mode so it catches the eye.
+  // Mock crossing phases in AR + risk zone pulse in safety mode.
   scene.onBeforeRenderObservable.add(() => {
+    if (xrHelper && xrHelper.state === BABYLON.WebXRState.IN_XR) {
+      const now = performance.now();
+      const limit =
+        crossingPhase === "wait"
+          ? CROSSING_PHASE.WAIT_MS
+          : CROSSING_PHASE.CROSS_MS;
+      if (now - crossingPhaseStartMs >= limit) {
+        crossingPhase = crossingPhase === "wait" ? "cross" : "wait";
+        crossingPhaseStartMs = now;
+        updateLabelsText();
+        refreshStatusLine();
+      }
+    }
+
     if (!riskZoneMat || !intersectionRoot || !intersectionRoot.isEnabled()) return;
     const t = performance.now();
     if (mode === "safety") {
