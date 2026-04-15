@@ -43,6 +43,38 @@ const hitTargetPos = new BABYLON.Vector3();
 const hitTargetQuat = new BABYLON.Quaternion();
 const HIT_SMOOTH = 0.1;
 
+// --- Layout sizes (Babylon units: crosswalk, street, preview floor, labels) ---
+const INTERSECTION = {
+  CROSSWALK_LENGTH: 3,
+  CROSSWALK_WIDTH: 0.3,
+  STREET_WIDTH: 1.8,
+  RISK_ZONE_Y: 0.002,
+  CROSSWALK_Y: 0.001,
+  ARROW_DIAMETER_BOTTOM: 0.16,
+  ARROW_HEIGHT: 0.4,
+  ARROW_TESSELLATION: 16,
+  ARROW_Y: 0.3,
+  ARROW_Z_ALONG_STREET: 1.4,
+};
+
+const PREVIEW_GROUND = {
+  WIDTH: 24,
+  HEIGHT: 24,
+  TEXTURE_U_SCALE: 8,
+  TEXTURE_V_SCALE: 8,
+};
+
+const FLOATING_LABELS = {
+  WAIT_CROSS_Y: 1.05,
+  WAIT_CROSS_Z: -0.22,
+  LOOK_Y: 1.95,
+  LOOK_Z: -0.22,
+  LOOK_WIDTH: 1.55,
+  LOOK_HEIGHT: 0.72,
+  RENDER_GROUP_MAIN: 1,
+  RENDER_GROUP_LOOK: 2,
+};
+
 // Update the line of text at the top of the page.
 function setStatus(text) {
   if (statusElement) {
@@ -168,17 +200,26 @@ function createFloatingLabel(scene, parent, text, cssColor, y, z, opts) {
 // Build the whole intersection as children of one node (easier to move in AR).
 function buildFourWayIntersection(scene) {
   const root = new BABYLON.TransformNode("intersectionRoot", scene);
-  const crosswalkLength = 3;
-  const crosswalkWidth = 0.3;
-  const streetWidth = 1.8;
+  const {
+    CROSSWALK_LENGTH,
+    CROSSWALK_WIDTH,
+    STREET_WIDTH,
+    RISK_ZONE_Y,
+    CROSSWALK_Y,
+    ARROW_DIAMETER_BOTTOM,
+    ARROW_HEIGHT,
+    ARROW_TESSELLATION,
+    ARROW_Y,
+    ARROW_Z_ALONG_STREET,
+  } = INTERSECTION;
 
   const riskZone = BABYLON.MeshBuilder.CreateGround(
     "riskZone",
-    { width: streetWidth * 2, height: streetWidth * 2 },
+    { width: STREET_WIDTH * 2, height: STREET_WIDTH * 2 },
     scene
   );
   riskZone.parent = root;
-  riskZone.position.y = 0.002;
+  riskZone.position.y = RISK_ZONE_Y;
   const riskMat = new BABYLON.StandardMaterial("riskMat", scene);
   riskMat.diffuseColor = new BABYLON.Color3(0.95, 0.2, 0.2);
   riskMat.alpha = 0.5;
@@ -191,11 +232,11 @@ function buildFourWayIntersection(scene) {
   function addCrosswalk(name, x, z, rotY) {
     const cw = BABYLON.MeshBuilder.CreateGround(
       name,
-      { width: crosswalkWidth, height: crosswalkLength },
+      { width: CROSSWALK_WIDTH, height: CROSSWALK_LENGTH },
       scene
     );
     cw.parent = root;
-    cw.position.set(x, 0.001, z);
+    cw.position.set(x, CROSSWALK_Y, z);
     cw.rotation.y = rotY;
     const m = new BABYLON.StandardMaterial(name + "Mat", scene);
     m.diffuseColor = new BABYLON.Color3(0.1, 0.65, 0.2);
@@ -206,43 +247,63 @@ function buildFourWayIntersection(scene) {
     return cw;
   }
 
-  addCrosswalk("crosswalkNorth", 0, -streetWidth, 0);
-  addCrosswalk("crosswalkSouth", 0, streetWidth, 0);
-  addCrosswalk("crosswalkWest", -streetWidth, 0, Math.PI / 2);
-  addCrosswalk("crosswalkEast", streetWidth, 0, Math.PI / 2);
+  addCrosswalk("crosswalkNorth", 0, -STREET_WIDTH, 0);
+  addCrosswalk("crosswalkSouth", 0, STREET_WIDTH, 0);
+  addCrosswalk("crosswalkWest", -STREET_WIDTH, 0, Math.PI / 2);
+  addCrosswalk("crosswalkEast", STREET_WIDTH, 0, Math.PI / 2);
 
   // Cone on its side reads as a forward arrow in navigation mode.
   const arrow = BABYLON.MeshBuilder.CreateCylinder(
     "directionArrow",
     {
       diameterTop: 0,
-      diameterBottom: 0.16,
-      height: 0.4,
-      tessellation: 16,
+      diameterBottom: ARROW_DIAMETER_BOTTOM,
+      height: ARROW_HEIGHT,
+      tessellation: ARROW_TESSELLATION,
     },
     scene
   );
   arrow.parent = root;
   arrow.rotation.z = Math.PI / 2;
-  arrow.position.set(0, 0.3, -streetWidth * 1.4);
+  arrow.position.set(0, ARROW_Y, -STREET_WIDTH * ARROW_Z_ALONG_STREET);
   const arrowMat = new BABYLON.StandardMaterial("arrowMat", scene);
   arrowMat.diffuseColor = new BABYLON.Color3(0.1, 0.8, 0.25);
   arrow.material = arrowMat;
 
   // WAIT/CROSS lower; LOOK stacked above so billboards do not hide each other
-  const lw = createFloatingLabel(scene, root, "WAIT - TRAFFIC", "#f97316", 1.05, -0.22, {
-    renderGroupId: 1,
-  });
-  const lc = createFloatingLabel(scene, root, "CROSS NOW", "#22c55e", 1.05, -0.22, {
-    renderGroupId: 1,
-  });
+  const lw = createFloatingLabel(
+    scene,
+    root,
+    "WAIT - TRAFFIC",
+    "#f97316",
+    FLOATING_LABELS.WAIT_CROSS_Y,
+    FLOATING_LABELS.WAIT_CROSS_Z,
+    { renderGroupId: FLOATING_LABELS.RENDER_GROUP_MAIN }
+  );
+  const lc = createFloatingLabel(
+    scene,
+    root,
+    "CROSS NOW",
+    "#22c55e",
+    FLOATING_LABELS.WAIT_CROSS_Y,
+    FLOATING_LABELS.WAIT_CROSS_Z,
+    { renderGroupId: FLOATING_LABELS.RENDER_GROUP_MAIN }
+  );
   lc.isVisible = false;
-  const ll = createFloatingLabel(scene, root, "LOOK LEFT", "#f5f5f5", 1.95, -0.22, {
-    renderGroupId: 2,
-    width: 1.55,
-    height: 0.72,
-    secondLine: "LOOK RIGHT",
-  });
+  const ll = createFloatingLabel(
+    scene,
+    root,
+    "LOOK LEFT",
+    "#f5f5f5",
+    FLOATING_LABELS.LOOK_Y,
+    FLOATING_LABELS.LOOK_Z,
+    {
+      renderGroupId: FLOATING_LABELS.RENDER_GROUP_LOOK,
+      width: FLOATING_LABELS.LOOK_WIDTH,
+      height: FLOATING_LABELS.LOOK_HEIGHT,
+      secondLine: "LOOK RIGHT",
+    }
+  );
 
   return {
     root,
@@ -325,7 +386,7 @@ const createScene = async function () {
   // Big floor so you can spin the scene on a laptop (hidden during AR).
   const ground = BABYLON.MeshBuilder.CreateGround(
     "previewGround",
-    { width: 24, height: 24 },
+    { width: PREVIEW_GROUND.WIDTH, height: PREVIEW_GROUND.HEIGHT },
     scene
   );
   const groundMat = new BABYLON.StandardMaterial("groundMat", scene);
@@ -335,8 +396,8 @@ const createScene = async function () {
     "https://www.babylonjs-playground.com/textures/floor.png",
     scene
   );
-  groundMat.diffuseTexture.uScale = 8;
-  groundMat.diffuseTexture.vScale = 8;
+  groundMat.diffuseTexture.uScale = PREVIEW_GROUND.TEXTURE_U_SCALE;
+  groundMat.diffuseTexture.vScale = PREVIEW_GROUND.TEXTURE_V_SCALE;
   ground.material = groundMat;
 
   const built = buildFourWayIntersection(scene);
