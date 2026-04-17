@@ -146,13 +146,13 @@ function toggleAudio() {
         audioContext = new Ctx();
       }
     }
-    playWaitBeep();
+    syncWaitAudioForArPhase();
   } else {
     stopBeep();
   }
 }
 
-// Start a quiet steady tone.
+// Start a quiet steady tone (only used during WAIT in AR).
 function playWaitBeep() {
   if (!audioEnabled || !audioContext) return;
   stopBeep();
@@ -175,6 +175,21 @@ function stopBeep() {
     }
     simpleBeepOscillator.disconnect();
     simpleBeepOscillator = null;
+  }
+}
+
+// Sound only during mock WAIT while in AR; silent on CROSS and outside AR.
+function syncWaitAudioForArPhase() {
+  if (!audioEnabled || !audioContext) {
+    stopBeep();
+    return;
+  }
+  const inXR =
+    xrHelper && xrHelper.state === BABYLON.WebXRState.IN_XR;
+  if (inXR && crossingPhase === "wait") {
+    playWaitBeep();
+  } else {
+    stopBeep();
   }
 }
 
@@ -375,6 +390,7 @@ function resetCrossingPhase(exitedArSession) {
   crossingPhase = "wait";
   crossingPhaseStartMs = exitedArSession ? 0 : performance.now();
   updateLabelsText();
+  syncWaitAudioForArPhase();
 }
 
 // Crosswalk colors, risk opacity, and arrow on/off from current mode.
@@ -659,6 +675,7 @@ const createScene = async function () {
         crossingPhaseStartMs = now;
         updateLabelsText();
         refreshStatusLine();
+        syncWaitAudioForArPhase();
       }
     }
 
