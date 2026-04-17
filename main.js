@@ -144,6 +144,9 @@ function toggleAudio() {
       const Ctx = window.AudioContext || window.webkitAudioContext;
       if (Ctx) {
         audioContext = new Ctx();
+        if (audioContext.state === "suspended") {
+          void audioContext.resume().catch(() => {});
+        }
       }
     }
     syncWaitAudioForArPhase();
@@ -156,13 +159,28 @@ function toggleAudio() {
 function playWaitBeep() {
   if (!audioEnabled || !audioContext) return;
   stopBeep();
-  simpleBeepOscillator = audioContext.createOscillator();
-  const gain = audioContext.createGain();
-  simpleBeepOscillator.frequency.value = 440;
-  gain.gain.value = 0.05;
-  simpleBeepOscillator.connect(gain);
-  gain.connect(audioContext.destination);
-  simpleBeepOscillator.start();
+
+  const wireAndStart = () => {
+    try {
+      simpleBeepOscillator = audioContext.createOscillator();
+      const gain = audioContext.createGain();
+      simpleBeepOscillator.frequency.value = 440;
+      gain.gain.value = 0.05;
+      simpleBeepOscillator.connect(gain);
+      gain.connect(audioContext.destination);
+      simpleBeepOscillator.start();
+    } catch (e) {
+      console.warn(e);
+    }
+  };
+
+  if (audioContext.state === "suspended") {
+    audioContext.resume().then(wireAndStart).catch(() => {
+      wireAndStart();
+    });
+  } else {
+    wireAndStart();
+  }
 }
 
 // Stop the tone if it is playing.
@@ -544,7 +562,10 @@ const createScene = async function () {
 
   // Pin the intersection to the world using an anchor, or just stop moving if no anchors.
   async function lockPlacement() {
-    if (placementLocked || xrHelper.state !== BABYLON.WebXRState.IN_XR) {
+    if (
+      placementLocked ||
+      xrHelper?.state !== BABYLON.WebXRState.IN_XR
+    ) {
       return;
     }
     if (!lastHitTestRaw) {
@@ -578,7 +599,8 @@ const createScene = async function () {
 
   // Each frame: move the marker toward the hit (smooth), unless placement is locked.
   hitTest.onHitTestResultObservable.add((results) => {
-    const inXR = xrHelper.state === BABYLON.WebXRState.IN_XR;
+    const inXR =
+      xrHelper?.state === BABYLON.WebXRState.IN_XR;
     lastHitTestRaw = results.length ? results[0] : null;
 
     if (placementLocked) {
@@ -715,6 +737,9 @@ const createScene = async function () {
       await xrHelper.enterXRAsync("immersive-ar", "local-floor");
     } catch (err) {
       console.error(err);
+      if (enterArContainer) {
+        enterArContainer.style.display = "flex";
+      }
       alert(
         "Could not start AR. Use a supported phone browser or try Preview."
       );
@@ -745,11 +770,19 @@ const createScene = async function () {
 };
 
 // Start the render loop after the scene is ready (XR setup is async).
-createScene().then((scene) => {
-  engine.runRenderLoop(function () {
-    scene.render();
+createScene()
+  .then((scene) => {
+    engine.runRenderLoop(function () {
+      scene.render();
+    });
+  })
+  .catch((err) => {
+    console.error(err);
+    if (statusElement) {
+      statusElement.textContent =
+        "Could not start the 3D scene. See the browser console.";
+    }
   });
-});
 
 // Keep the canvas full window when the browser size changes.
 window.addEventListener("resize", function () {
