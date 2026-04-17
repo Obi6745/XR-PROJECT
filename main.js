@@ -106,7 +106,7 @@ function setMode(newMode) {
   refreshStatusLine();
 }
 
-// Status text: in AR include mock WAIT/CROSS; outside AR use mode-only lines.
+// Status text: in AR show mode + crossing phase; outside AR use mode-only lines.
 function refreshStatusLine() {
   const inXR =
     xrHelper && xrHelper.state === BABYLON.WebXRState.IN_XR;
@@ -118,19 +118,19 @@ function refreshStatusLine() {
     }
     return;
   }
+  const modeLabel =
+    mode === "navigation" ? "Navigation mode" : "Safety mode";
+  const crossingLabel =
+    crossingPhase === "wait" ? "WAIT" : "CROSS";
   if (placementLocked) {
-    const short =
-      crossingPhase === "wait" ? "WAIT" : "CROSS";
-    setStatus(`Locked · ${short} · Unlock to move`);
+    setStatus(
+      `Locked · Crossing: ${crossingLabel} · Unlock to move`
+    );
     return;
   }
-  const signal =
-    crossingPhase === "wait" ? "Signal: WAIT" : "Signal: CROSS";
-  if (mode === "navigation") {
-    setStatus(`Navigation · ${signal}`);
-  } else {
-    setStatus(`Safety · ${signal}`);
-  }
+  setStatus(
+    `${modeLabel} · Crossing: ${crossingLabel}`
+  );
 }
 
 // Turn the simple beep on or off (needs a user click first on many browsers).
