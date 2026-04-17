@@ -370,6 +370,13 @@ function updateLabelsText() {
   }
 }
 
+// WAIT phase + timer: use exitedArSession true when leaving AR (stops the clock).
+function resetCrossingPhase(exitedArSession) {
+  crossingPhase = "wait";
+  crossingPhaseStartMs = exitedArSession ? 0 : performance.now();
+  updateLabelsText();
+}
+
 // Crosswalk colors, risk opacity, and arrow on/off from current mode.
 function updateIntersectionColors() {
   if (!crosswalkMeshes.length || !riskZoneMat || !directionArrow) return;
@@ -512,6 +519,7 @@ const createScene = async function () {
     intersectionRoot.setParent(null);
     intersectionRoot.setEnabled(false);
     marker.isVisible = false;
+    resetCrossingPhase(false);
     updatePlacementButtons();
     if (xrHelper && xrHelper.state === BABYLON.WebXRState.IN_XR) {
       setStatus("Aim at the floor, then tap Lock to floor");
@@ -609,14 +617,11 @@ const createScene = async function () {
       lastHitTestRaw = null;
       intersectionRoot.setEnabled(false);
       if (enterArContainer) enterArContainer.style.display = "none";
-      crossingPhase = "wait";
-      crossingPhaseStartMs = performance.now();
-      updateLabelsText();
+      resetCrossingPhase(false);
       setStatus("Aim at the floor, then tap Lock to floor");
       updatePlacementButtons();
     } else if (state === BABYLON.WebXRState.NOT_IN_XR) {
-      crossingPhase = "wait";
-      crossingPhaseStartMs = 0;
+      resetCrossingPhase(true);
       placementLocked = false;
       hitSmoothingStarted = false;
       lastHitTestRaw = null;
@@ -636,7 +641,6 @@ const createScene = async function () {
       intersectionRoot.setEnabled(true);
       marker.isVisible = false;
       if (enterArContainer) enterArContainer.style.display = "flex";
-      updateLabelsText();
       refreshStatusLine();
       updatePlacementButtons();
     }
