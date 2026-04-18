@@ -656,9 +656,13 @@ const createScene = async function () {
       intersectionRoot.setEnabled(false);
       if (enterArContainer) enterArContainer.style.display = "none";
       resetCrossingPhase(false);
-      setStatus("Aim at the floor, then tap Lock to floor");
+      attachArPlacementTap();
+      setStatus(
+        "Aim at the floor, then tap the view to lock (tap again to unlock), or use the buttons."
+      );
       updatePlacementButtons();
     } else if (state === BABYLON.WebXRState.NOT_IN_XR) {
+      detachArPlacementTap();
       resetCrossingPhase(true);
       placementLocked = false;
       hitSmoothingStarted = false;
@@ -730,11 +734,48 @@ const createScene = async function () {
     });
   }
 
+  // Tap on the 3D view during AR: lock when tracking, unlock when already locked.
+  let arPlacementTapObserver = null;
+
+  function detachArPlacementTap() {
+    if (arPlacementTapObserver) {
+      scene.onPointerObservable.remove(arPlacementTapObserver);
+      arPlacementTapObserver = null;
+    }
+  }
+
+  function attachArPlacementTap() {
+    detachArPlacementTap();
+    arPlacementTapObserver = scene.onPointerObservable.add((pointerInfo) => {
+      if (pointerInfo.type !== BABYLON.PointerEventTypes.POINTERDOWN) {
+        return;
+      }
+      if (!xrHelper || xrHelper.state !== BABYLON.WebXRState.IN_XR) {
+        return;
+      }
+      if (placementLocked) {
+        unlockPlacement();
+        return;
+      }
+      if (
+        lastHitTestRaw &&
+        intersectionRoot &&
+        intersectionRoot.isEnabled()
+      ) {
+        void lockPlacement();
+      }
+    });
+  }
+
   // User gesture required to enter AR in most browsers.
   async function startAR() {
     if (!xrHelper) return;
     try {
       await xrHelper.enterXRAsync("immersive-ar", "local-floor");
+      attachArPlacementTap();
+      setStatus(
+        "Aim at the floor, then tap the view to lock (tap again to unlock), or use the buttons."
+      );
     } catch (err) {
       console.error(err);
       if (enterArContainer) {
