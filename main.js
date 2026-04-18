@@ -75,6 +75,17 @@ const FLOATING_LABELS = {
   RENDER_GROUP_LOOK: 2,
 };
 
+// Simple trees and bushes around the intersection (same units as the street).
+const STREET_DECOR = {
+  TREE_RING: 3.35,
+  TRUNK_HEIGHT: 0.5,
+  TRUNK_DIAM: 0.14,
+  FOLIAGE_HEIGHT: 0.85,
+  FOLIAGE_BOTTOM: 0.38,
+  BUSH_OFFSET: 2.15,
+  BUSH_SIZE: 0.28,
+};
+
 // Mock traffic light: only advances while in AR (preview uses mode for labels).
 const CROSSING_PHASE = {
   WAIT_MS: 4500,
@@ -265,6 +276,92 @@ function createFloatingLabel(scene, parent, text, cssColor, y, z, opts) {
   return plane;
 }
 
+// Low-poly tree (trunk + cone) for sidewalk / corner decoration.
+function addSimpleTree(scene, parent, x, z, scale, index) {
+  const s = STREET_DECOR;
+  const group = new BABYLON.TransformNode("treeGroup_" + index, scene);
+  group.parent = parent;
+  group.position.set(x, 0, z);
+  group.scaling.scaleInPlace(scale);
+
+  const trunk = BABYLON.MeshBuilder.CreateCylinder(
+    "treeTrunk_" + index,
+    {
+      height: s.TRUNK_HEIGHT,
+      diameter: s.TRUNK_DIAM,
+      tessellation: 8,
+    },
+    scene
+  );
+  trunk.parent = group;
+  trunk.position.y = s.TRUNK_HEIGHT / 2 + 0.01;
+  const trunkMat = new BABYLON.StandardMaterial("treeTrunkMat_" + index, scene);
+  trunkMat.diffuseColor = new BABYLON.Color3(0.38, 0.24, 0.14);
+  trunk.material = trunkMat;
+
+  const foliage = BABYLON.MeshBuilder.CreateCylinder(
+    "treeFoliage_" + index,
+    {
+      diameterTop: 0,
+      diameterBottom: s.FOLIAGE_BOTTOM,
+      height: s.FOLIAGE_HEIGHT,
+      tessellation: 8,
+    },
+    scene
+  );
+  foliage.parent = group;
+  foliage.position.y = s.TRUNK_HEIGHT + s.FOLIAGE_HEIGHT / 2;
+  const folMat = new BABYLON.StandardMaterial("treeFolMat_" + index, scene);
+  folMat.diffuseColor = new BABYLON.Color3(0.1, 0.52, 0.22);
+  foliage.material = folMat;
+}
+
+// Small rounded bush (squashed sphere) near the corner.
+function addBush(scene, parent, x, z, index) {
+  const s = STREET_DECOR;
+  const bush = BABYLON.MeshBuilder.CreateSphere(
+    "bush_" + index,
+    { diameter: s.BUSH_SIZE, segments: 8 },
+    scene
+  );
+  bush.parent = parent;
+  bush.position.set(x, s.BUSH_SIZE * 0.35, z);
+  bush.scaling = new BABYLON.Vector3(1, 0.65, 1);
+  const mat = new BABYLON.StandardMaterial("bushMat_" + index, scene);
+  mat.diffuseColor = new BABYLON.Color3(0.15, 0.45, 0.18);
+  bush.material = mat;
+}
+
+// Trees on the diagonals and cardinals; bushes a bit closer to the road.
+function addStreetDecor(scene, root) {
+  const ring = STREET_DECOR.TREE_RING;
+  const treeSpots = [
+    [ring, ring],
+    [ring, -ring],
+    [-ring, ring],
+    [-ring, -ring],
+    [ring, 0],
+    [-ring, 0],
+    [0, ring],
+    [0, -ring],
+  ];
+  const treeScales = [0.92, 1.08, 0.88, 1.02, 1.0, 0.95, 1.06, 0.9];
+  treeSpots.forEach((p, i) => {
+    addSimpleTree(scene, root, p[0], p[1], treeScales[i], i);
+  });
+
+  const bo = STREET_DECOR.BUSH_OFFSET;
+  const bushSpots = [
+    [bo, bo],
+    [bo, -bo],
+    [-bo, bo],
+    [-bo, -bo],
+  ];
+  bushSpots.forEach((p, i) => {
+    addBush(scene, root, p[0], p[1], i);
+  });
+}
+
 // Build the whole intersection as children of one node (easier to move in AR).
 function buildFourWayIntersection(scene) {
   const root = new BABYLON.TransformNode("intersectionRoot", scene);
@@ -372,6 +469,8 @@ function buildFourWayIntersection(scene) {
       secondLine: "LOOK RIGHT",
     }
   );
+
+  addStreetDecor(scene, root);
 
   return {
     root,
