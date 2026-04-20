@@ -95,6 +95,148 @@ const CROSSING_PHASE = {
 let crossingPhase = "wait";
 let crossingPhaseStartMs = 0;
 
+// Above-and-beyond: 3D traffic lights + phase haptics + prefs persistence.
+const STORAGE_KEYS = {
+  MODE: "saferoute_xr_mode",
+};
+
+let trafficLightMeshes = null;
+
+function loadStringPref(key, fallback) {
+  try {
+    const v = localStorage.getItem(key);
+    if (v === "navigation" || v === "safety") return v;
+  } catch (e) {
+    // ignore
+  }
+  return fallback;
+}
+
+function saveStringPref(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch (e) {
+    // ignore
+  }
+}
+
+// Short vibration when the mock signal changes (many Android AR browsers).
+function pulsePhaseHaptics(phase) {
+  if (typeof navigator === "undefined" || !navigator.vibrate) return;
+  const inXR =
+    xrHelper && xrHelper.state === BABYLON.WebXRState.IN_XR;
+  if (!inXR) return;
+  try {
+    if (phase === "cross") {
+      navigator.vibrate([25, 30, 35]);
+    } else {
+      navigator.vibrate(18);
+    }
+  } catch (e) {
+    // ignore
+  }
+}
+
+// Seconds left in the current WAIT or CROSS slice (for status + teaching).
+function crossingSecondsRemaining() {
+  if (!crossingPhaseStartMs) return 0;
+  const now = performance.now();
+  const limit =
+    crossingPhase === "wait"
+      ? CROSSING_PHASE.WAIT_MS
+      : CROSSING_PHASE.CROSS_MS;
+  return Math.max(0, (limit - (now - crossingPhaseStartMs)) / 1000);
+}
+
+// Pedestrian signal on a slim pole: red = wait, green = cross.
+function addTrafficLightAssembly(scene, parent) {
+  const sw = INTERSECTION.STREET_WIDTH;
+  const poleH = 1.35;
+  const pole = BABYLON.MeshBuilder.CreateCylinder(
+    "tl_pole",
+    { height: poleH, diameter: 0.07, tessellation: 12 },
+    scene
+  );
+  pole.parent = parent;
+  pole.position.set(sw * 1.15, poleH / 2, -sw * 1.05);
+  const poleMat = new BABYLON.StandardMaterial("tl_poleMat", scene);
+  poleMat.diffuseColor = new BABYLON.Color3(0.22, 0.22, 0.24);
+  pole.material = poleMat;
+
+  const housing = BABYLON.MeshBuilder.CreateBox(
+    "tl_housing",
+    { width: 0.22, height: 0.62, depth: 0.12 },
+    scene
+  );
+  housing.parent = parent;
+  housing.position.set(
+    pole.position.x,
+    poleH - 0.28,
+    pole.position.z + 0.02
+  );
+  const housingMat = new BABYLON.StandardMaterial("tl_housingMat", scene);
+  housingMat.diffuseColor = new BABYLON.Color3(0.12, 0.12, 0.14);
+  housing.material = housingMat;
+
+  function makeBulb(name, y, baseColor, emissiveOn) {
+    const bulb = BABYLON.MeshBuilder.CreateSphere(
+      name,
+      { diameter: 0.14, segments: 12 },
+      scene
+    );
+    bulb.parent = parent;
+    bulb.position.set(housing.position.x, y, housing.position.z + 0.07);
+    const m = new BABYLON.StandardMaterial(name + "Mat", scene);
+    m.diffuseColor = baseColor;
+    m.specularColor = BABYLON.Color3.Black();
+    m.emissiveColor = emissiveOn.clone();
+    m.disableLighting = false;
+    bulb.material = m;
+    return m;
+  }
+
+  const redMat = makeBulb(
+    "tl_red",
+    housing.position.y + 0.18,
+    new BABYLON.Color3(0.55, 0.05, 0.05),
+    new BABYLON.Color3(0.9, 0, 0)
+  );
+  const amberMat = makeBulb(
+    "tl_amber",
+    housing.position.y,
+    new BABYLON.Color3(0.45, 0.32, 0.05),
+    new BABYLON.Color3(0.95, 0.65, 0.05)
+  );
+  const greenMat = makeBulb(
+    "tl_green",
+    housing.position.y - 0.18,
+    new BABYLON.Color3(0.05, 0.45, 0.08),
+    new BABYLON.Color3(0.05, 0.85, 0.12)
+  );
+
+  function applyPhase(phase) {
+    const dim = new BABYLON.Color3(0.02, 0.02, 0.02);
+    if (phase === "wait") {
+      redMat.emissiveColor = new BABYLON.Color3(0.85, 0.05, 0.05);
+      amberMat.emissiveColor = dim;
+      greenMat.emissiveColor = dim;
+    } else {
+      redMat.emissiveColor = dim;
+      amberMat.emissiveColor = dim;
+      greenMat.emissiveColor = new BABYLON.Color3(0.05, 0.9, 0.15);
+    }
+  }
+
+  applyPhase("wait");
+  return { applyPhase };
+}
+
+function updateTrafficLightsForPhase() {
+  if (trafficLightMeshes) {
+    trafficLightMeshes.applyPhase(crossingPhase);
+  }
+}
+
 // Update the line of text at the top of the page.
 function setStatus(text) {
   if (statusElement) {
@@ -105,6 +247,7 @@ function setStatus(text) {
 // Navigation = green path + arrow. Safety = warnings + stronger risk color.
 function setMode(newMode) {
   mode = newMode;
+  saveStringPref(STORAGE_KEYS.MODE, mode);
   if (mode === "navigation") {
     if (navModeBtn) navModeBtn.classList.add("active");
     if (safetyModeBtn) safetyModeBtn.classList.remove("active");
@@ -129,18 +272,38 @@ function refreshStatusLine() {
     }
     return;
   }
+
+  const layoutVisible =
+    intersectionRoot && intersectionRoot.isEnabled();
+  if (!placementLocked && !layoutVisible) {
+    setStatus(
+      "Aim at the floor, then tap the view to lock (tap again to unlock), or use the buttons."
+    );
+    return;
+  }
+
+  let countdown = "";
+  if (crossingPhaseStartMs > 0) {
+    const sec = crossingSecondsRemaining();
+    const whole = Math.max(0, Math.ceil(sec));
+    countdown =
+      crossingPhase === "wait"
+        ? ` · Next cross in ${whole}s`
+        : ` · ${whole}s to clear`;
+  }
+
   const modeLabel =
     mode === "navigation" ? "Navigation mode" : "Safety mode";
   const crossingLabel =
     crossingPhase === "wait" ? "WAIT" : "CROSS";
   if (placementLocked) {
     setStatus(
-      `Locked · Crossing: ${crossingLabel} · Unlock to move`
+      `Locked · Crossing: ${crossingLabel} · Unlock to move${countdown}`
     );
     return;
   }
   setStatus(
-    `${modeLabel} · Crossing: ${crossingLabel}`
+    `${modeLabel} · Crossing: ${crossingLabel} · Tap to lock${countdown}`
   );
 }
 
@@ -472,6 +635,8 @@ function buildFourWayIntersection(scene) {
 
   addStreetDecor(scene, root);
 
+  trafficLightMeshes = addTrafficLightAssembly(scene, root);
+
   return {
     root,
     riskMat,
@@ -507,6 +672,7 @@ function resetCrossingPhase(exitedArSession) {
   crossingPhase = "wait";
   crossingPhaseStartMs = exitedArSession ? 0 : performance.now();
   updateLabelsText();
+  updateTrafficLightsForPhase();
   syncWaitAudioForArPhase();
 }
 
@@ -533,6 +699,7 @@ function updateIntersectionColors() {
   if (mode === "navigation") {
     directionArrow.isVisible = true;
     directionArrow.material.diffuseColor = new BABYLON.Color3(0.1, 0.8, 0.25);
+    directionArrow.position.y = INTERSECTION.ARROW_Y;
   } else {
     directionArrow.isVisible = false;
   }
@@ -592,6 +759,9 @@ const createScene = async function () {
   intersectionRoot.position = new BABYLON.Vector3(0, 0.01, 0);
   updateIntersectionColors();
   updateLabelsText();
+
+  const savedMode = loadStringPref(STORAGE_KEYS.MODE, "navigation");
+  setMode(savedMode === "safety" ? "safety" : "navigation");
 
   // AR session: find the real floor with hit-test; anchors help lock position.
   const xr = await scene.createDefaultXRExperienceAsync({
@@ -798,10 +968,16 @@ const createScene = async function () {
       if (now - crossingPhaseStartMs >= limit) {
         crossingPhase = crossingPhase === "wait" ? "cross" : "wait";
         crossingPhaseStartMs = now;
+        pulsePhaseHaptics(crossingPhase);
         updateLabelsText();
+        updateTrafficLightsForPhase();
         refreshStatusLine();
         syncWaitAudioForArPhase();
       }
+    }
+
+    if (xrHelper && xrHelper.state === BABYLON.WebXRState.IN_XR) {
+      refreshStatusLine();
     }
 
     if (!riskZoneMat || !intersectionRoot || !intersectionRoot.isEnabled()) return;
@@ -812,6 +988,15 @@ const createScene = async function () {
       riskZoneMat.alpha = base + amp * Math.sin(t * 0.004);
     } else {
       riskZoneMat.alpha = mode === "navigation" ? 0.4 : 0.7;
+    }
+
+    if (
+      mode === "navigation" &&
+      directionArrow &&
+      directionArrow.isVisible
+    ) {
+      directionArrow.position.y =
+        INTERSECTION.ARROW_Y + 0.045 * Math.sin(t * 0.0032);
     }
   });
 
